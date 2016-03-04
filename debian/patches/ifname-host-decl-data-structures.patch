@@ -1,0 +1,75 @@
+Data structures to add ifname to host declarations and leases
+
+diff --git a/includes/dhcpd.h b/includes/dhcpd.h
+index b0cd6f6..a42350e 100644
+--- a/includes/dhcpd.h
++++ b/includes/dhcpd.h
+@@ -471,6 +471,12 @@ struct ldap_config_stack {
+ };
+ #endif
+ 
++/* An interface on the server */
++struct ifname {
++	u_int8_t len;
++	u_int8_t *name;
++};
++
+ typedef enum {
+ 	server_startup = 0,
+ 	server_running = 1,
+@@ -501,7 +507,7 @@ typedef u_int8_t binding_state_t;
+ struct lease {
+ 	OMAPI_OBJECT_PREAMBLE;
+ 	struct lease *next;
+-	struct lease *n_uid, *n_hw;
++	struct lease *n_uid, *n_hw, *n_ifname;
+ 
+ 	struct iaddr ip_addr;
+ 	TIME starts, ends, sort_time;
+@@ -522,6 +528,7 @@ struct lease {
+ 	unsigned short uid_max;
+ 	unsigned char uid_buf [7];
+ 	struct hardware hardware_addr;
++	struct ifname ifname;
+ 
+ 	u_int8_t flags;
+ #       define STATIC_LEASE		1
+@@ -872,6 +879,7 @@ struct host_decl {
+ 	struct host_decl *n_dynamic;
+ 	char *name;
+ 	struct hardware interface;
++	struct ifname ifname;
+ 	struct data_string client_identifier;
+ 	struct option *host_id_option;
+ 	struct data_string host_id;
+@@ -3204,9 +3212,11 @@ void trigger_event(struct eventqueue **);
+ extern struct subnet *subnets;
+ extern struct shared_network *shared_networks;
+ extern host_hash_t *host_hw_addr_hash;
++extern host_hash_t *host_ifname_hash;
+ extern host_hash_t *host_uid_hash;
+ extern host_hash_t *host_name_hash;
+ extern lease_id_hash_t *lease_uid_hash;
++extern lease_id_hash_t *lease_ifname_hash;
+ extern lease_ip_hash_t *lease_ip_addr_hash;
+ extern lease_id_hash_t *lease_hw_addr_hash;
+ 
+diff --git a/server/mdb.c b/server/mdb.c
+index 76eb797..be4d19a 100644
+--- a/server/mdb.c
++++ b/server/mdb.c
+@@ -38,11 +38,13 @@
+ struct subnet *subnets;
+ struct shared_network *shared_networks;
+ host_hash_t *host_hw_addr_hash;
++host_hash_t *host_ifname_hash;
+ host_hash_t *host_uid_hash;
+ host_hash_t *host_name_hash;
+-lease_id_hash_t *lease_uid_hash;
+ lease_ip_hash_t *lease_ip_addr_hash;
++lease_id_hash_t *lease_uid_hash;
+ lease_id_hash_t *lease_hw_addr_hash;
++lease_id_hash_t *lease_ifname_hash;
+ 
+ /*
+  * We allow users to specify any option as a host identifier.

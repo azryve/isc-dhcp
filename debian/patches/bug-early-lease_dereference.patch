@@ -1,0 +1,17 @@
+There is a dereference of fixed_lease; however it is used immediately below to
+print out the host name.  This is remedied by deleting the dereferencing of
+fixed_lease because ip_lease is dereferenced a bit further down which mitigates
+the db_conflict.
+
+diff --git a/server/dhcp.c b/server/dhcp.c
+index da4585f..af524c2 100644
+--- a/server/dhcp.c
++++ b/server/dhcp.c
+@@ -3694,7 +3694,6 @@ int find_lease (struct lease **lp,
+ 		   that there are both a dynamic lease and a fixed-address
+ 		   declaration for the same IP address. */
+ 		if (packet -> packet_type == DHCPREQUEST && fixed_lease) {
+-			lease_dereference (&fixed_lease, MDL);
+ 		      db_conflict:
+ 			log_error ("Dynamic and static leases present for %s.",
+ 				   piaddr (cip));

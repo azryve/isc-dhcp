@@ -1,0 +1,135 @@
+Exchange full lease information with failover peer
+
+diff --git a/includes/failover.h b/includes/failover.h
+index 1db0e68..640e60b 100644
+--- a/includes/failover.h
++++ b/includes/failover.h
+@@ -114,6 +114,8 @@ typedef struct {
+ #define FTB_DELAYED_SERVICE			0x00000400
+ #define FTO_HBA				11
+ #define FTB_HBA					0x00000800
++#define FTO_IFNAME			30
++#define FTB_IFNAME				0x40000000
+ #define FTO_IP_FLAGS			12
+ #define FTB_IP_FLAGS				0x00001000
+ #define FTO_LEASE_EXPIRY		13
+@@ -151,7 +153,9 @@ typedef struct {
+ #define FTO_VENDOR_OPTIONS		29
+ #define FTB_VENDOR_OPTIONS			0x20000000
+ 
+-#define FTO_MAX				FTO_VENDOR_OPTIONS
++/* Decided to keep all other option numbers the same
++#define FTO_MAX				FTO_VENDOR_OPTIONS */
++#define FTO_MAX				FTO_IFNAME
+ 
+ /* Failover protocol message types from Section 6.1: */
+ #define FTM_POOLREQ		1
+@@ -247,6 +251,7 @@ typedef struct failover_message {
+ 
+ 	/* Arbitrary field options. */
+ 	failover_option_t chaddr;
++	failover_option_t ifname;
+ 	failover_option_t client_identifier;
+ 	failover_option_t hba;
+ 	failover_option_t message;
+diff --git a/server/failover.c b/server/failover.c
+index 26be290..f7033fb 100644
+--- a/server/failover.c
++++ b/server/failover.c
+@@ -3797,6 +3797,9 @@ const char *dhcp_failover_option_name (unsigned type)
+ 	    case FTO_HBA:
+ 		return "hba";
+ 
++	    case FTO_IFNAME:
++		return "ifname";
++
+ 	    case FTO_IP_FLAGS:
+ 		return "ip-flags";
+ 
+@@ -4629,6 +4632,11 @@ isc_result_t dhcp_failover_send_bind_update (dhcp_failover_state_t *state,
+ 						lease -> uid_len,
+ 						lease -> uid)
+ 		   : &skip_failover_option,
++		   lease -> ifname.len
++		   ? dhcp_failover_make_option (FTO_IFNAME, FMA,
++						lease -> ifname.len,
++						lease -> ifname.name)
++		   : &skip_failover_option,
+ 		   lease -> hardware_addr.hlen
+ 		   ? dhcp_failover_make_option (FTO_CHADDR, FMA,
+ 						lease -> hardware_addr.hlen,
+@@ -4706,6 +4714,11 @@ isc_result_t dhcp_failover_send_bind_ack (dhcp_failover_state_t *state,
+ 						msg -> client_identifier.count,
+ 						msg -> client_identifier.data)
+ 		   : &skip_failover_option,
++		   (msg -> options_present & FTB_IFNAME)
++		   ? dhcp_failover_make_option (FTO_IFNAME, FMA,
++						msg -> chaddr.count,
++						msg -> chaddr.data)
++		   : &skip_failover_option,
+ 		   (msg -> options_present & FTB_CHADDR)
+ 		   ? dhcp_failover_make_option (FTO_CHADDR, FMA,
+ 						msg -> chaddr.count,
+@@ -5048,6 +5061,7 @@ isc_result_t dhcp_failover_process_bind_update (dhcp_failover_state_t *state,
+ 	int send_to_backup = 0;
+ 	int required_options;
+ 	isc_boolean_t chaddr_changed = ISC_FALSE;
++	isc_boolean_t ifname_changed = ISC_FALSE;
+ 	isc_boolean_t ident_changed = ISC_FALSE;
+ 
+ 	/* Validate the binding update. */
+@@ -5140,6 +5154,36 @@ isc_result_t dhcp_failover_process_bind_update (dhcp_failover_state_t *state,
+ 			binding_scope_dereference(&lt->scope, MDL);
+ 	}
+ 
++	/* There is no explicit message content to indicate that the lease
++	 * isn't constrained by ifname.  So if we don't hear of a value,
++	 * we discard the last one.
++	 */
++	if (msg -> options_present & FTB_IFNAME) {
++		if (msg->binding_status == FTS_ABANDONED) {
++			message = "BNDUPD to ABANDONED with a IFNAME";
++			goto bad;
++		}
++		if (msg -> chaddr.count > sizeof lt -> ifname.name) {
++			message = "ifname too long";
++			goto bad;
++		}
++
++		if ((lt->ifname.len != msg->chaddr.count) ||
++		    (memcmp(lt->ifname.name, msg->ifname.data,
++			    msg->ifname.count) != 0))
++			ifname_changed = ISC_TRUE;
++
++		lt -> ifname.len = msg -> ifname.count;
++		memcpy (lt -> ifname.name, msg -> ifname.data,
++			msg -> ifname.count);
++	} else if (lt->ifname.len &&
++		   msg->binding_status != FTS_RESET &&
++		   msg->binding_status != FTS_FREE &&
++		   msg->binding_status != FTS_BACKUP) {
++		ifname_changed = ISC_TRUE;
++		lt->ifname.len = 0;
++	}
++
+ 	/* There is no explicit message content to indicate that the client
+ 	 * supplied no client-identifier.  So if we don't hear of a value,
+ 	 * we discard the last one.
+@@ -5217,7 +5261,7 @@ isc_result_t dhcp_failover_process_bind_update (dhcp_failover_state_t *state,
+ 	 * scope blindly.
+ 	 */
+ 	if (msg->binding_status == FTS_ACTIVE &&
+-	    (chaddr_changed || ident_changed)) {
++	    (chaddr_changed || ident_changed || ifname_changed)) {
+ 		ddns_removals(lease, NULL, NULL, ISC_FALSE);
+ 
+ 		if (lease->scope != NULL)
+@@ -6323,6 +6367,8 @@ static isc_result_t failover_message_dereference (failover_message_t **mp,
+ 						      file, line);
+ 		if (m -> chaddr.data)
+ 			dfree (m -> chaddr.data, file, line);
++		if (m -> ifname.data)
++			dfree (m -> ifname.data, file, line);
+ 		if (m -> client_identifier.data)
+ 			dfree (m -> client_identifier.data, file, line);
+ 		if (m -> hba.data)

@@ -1,0 +1,25 @@
+Add routing facility to dhcrelay start/stop dependency list
+
+routing facility currently includes service quagga/zebra which
+can be used to configure networking on a system. (ie in addition
+to the base $network facility)
+
+dhcrelay reads interface ip addresses at start.
+So on systems that use services like quagga/zebra to configure
+networking, this patch will make sure dhcrelay starts after quagga
+
+diff --git a/debian/isc-dhcp-relay.init.d b/debian/isc-dhcp-relay.init.d
+index 6526ba0..08a45c8 100644
+--- a/debian/isc-dhcp-relay.init.d
++++ b/debian/isc-dhcp-relay.init.d
+@@ -6,8 +6,8 @@
+ # Provides:          isc-dhcp-relay
+ # Required-Start:    $remote_fs $network
+ # Required-Stop:     $remote_fs $network
+-# Should-Start:      $local_fs
+-# Should-Stop:       $local_fs
++# Should-Start:      $local_fs $routing
++# Should-Stop:       $local_fs $routing
+ # Default-Start:     2 3 4 5
+ # Default-Stop:      0 1 6
+ # Short-Description: DHCP relay

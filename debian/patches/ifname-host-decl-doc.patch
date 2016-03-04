@@ -1,0 +1,43 @@
+Update the documentation as necessary to describe the new functionality
+
+diff --git a/server/dhcpd.conf.5 b/server/dhcpd.conf.5
+index b6dc9f6..7890fa9 100644
+--- a/server/dhcpd.conf.5
++++ b/server/dhcpd.conf.5
+@@ -1648,12 +1648,12 @@ not specified for the host, \fIhostname\fR is used.
+ .PP
+ \fIHost\fR declarations are matched to actual DHCP or BOOTP clients
+ by matching the \fRdhcp-client-identifier\fR option specified in the
+-\fIhost\fR declaration to the one supplied by the client, or, if the
+-\fIhost\fR declaration or the client does not provide a
+-\fRdhcp-client-identifier\fR option, by matching the \fIhardware\fR
+-parameter in the \fIhost\fR declaration to the network hardware
+-address supplied by the client.   BOOTP clients do not normally
+-provide a \fIdhcp-client-identifier\fR, so the hardware address must
++\fIhost\fR declaration to the one supplied by the client; by matching the
++\fIhardware\fR parameter in the \fIhost\fR declaration to the network hardware
++address supplied by the client; or by matching the \fIifname\fR parameter,
++specified as a string in the \fIhost\fR declaration to the incoming interface
++or DHCP relay information (option 82).  BOOTP clients do not normally provide
++a \fIdhcp-client-identifier\fR, so either the hardware address or ifname must
+ be used for all clients that may boot using the BOOTP protocol.
+ .PP
+ DHCPv6 servers can use the \fIhost-identifier option\fR parameter in
+@@ -1662,12 +1662,12 @@ to identify hosts.
+ .PP
+ Please be aware that
+ .B only
+-the \fIdhcp-client-identifier\fR option and the hardware address can be
+-used to match a host declaration, or the \fIhost-identifier option\fR
+-parameter for DHCPv6 servers.   For example, it is not possible to
+-match a host declaration to a \fIhost-name\fR option.   This is
++the \fIdhcp-client-identifier\fR option, \fifname\f, and the hardware
++address can be used to match a host declaration, or the \fIhost-identifier
++option\fR parameter for DHCPv6 servers.   For example, it is not possible
++to match a host declaration to a \fIhost-name\fR option.   This is
+ because the host-name option cannot be guaranteed to be unique for any
+-given client, whereas both the hardware address and
++given client, whereas the hardware address, interface name, and
+ \fIdhcp-client-identifier\fR option are at least theoretically
+ guaranteed to be unique to a given client.
+ .PP

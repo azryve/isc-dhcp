@@ -1,0 +1,21 @@
+
+
+diff --git a/debian/dhclient.conf b/debian/dhclient.conf
+index 431fafd..0b78ad2 100644
+--- a/debian/dhclient.conf
++++ b/debian/dhclient.conf
+@@ -19,11 +19,13 @@ send host-name = gethostname();
+ #send dhcp-lease-time 3600;
+ #supersede domain-name "fugue.com home.vix.com";
+ #prepend domain-name-servers 127.0.0.1;
++
++option cumulus-provision-url code 239 = text;
+ request subnet-mask, broadcast-address, time-offset, routers,
+ 	domain-name, domain-name-servers, domain-search, host-name,
+ 	dhcp6.name-servers, dhcp6.domain-search,
+ 	netbios-name-servers, netbios-scope, interface-mtu,
+-	rfc3442-classless-static-routes, ntp-servers;
++        rfc3442-classless-static-routes, ntp-servers, cumulus-provision-url;
+ #require subnet-mask, domain-name-servers;
+ #timeout 60;
+ #retry 60;

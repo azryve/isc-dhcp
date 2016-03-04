@@ -1,0 +1,360 @@
+utility functions that manipulate ifname as well as add, search, and delete
+leases and host declarations
+
+diff --git a/includes/dhcpd.h b/includes/dhcpd.h
+index a42350e..4460723 100644
+--- a/includes/dhcpd.h
++++ b/includes/dhcpd.h
+@@ -1983,6 +1983,7 @@ char *parse_host_name (struct parse *);
+ int parse_ip_addr_or_hostname (struct expression **,
+ 			       struct parse *, int);
+ void parse_hardware_param (struct parse *, struct hardware *);
++void parse_ifname_param (struct parse *, struct ifname *);
+ void parse_lease_time (struct parse *, TIME *);
+ unsigned char *parse_numeric_aggregate (struct parse *,
+ 					unsigned char *, unsigned *,
+@@ -2188,6 +2189,11 @@ void get_server_source_address(struct in_addr *from,
+ 			       struct option_state *options,
+ 			       struct packet *packet);
+ 
++isc_boolean_t same_ifname(struct ifname *a, struct ifname *b);
++isc_result_t build_ifname(struct ifname *ifname, struct packet *packet);
++isc_result_t set_ifname(struct ifname *ifname, unsigned char *name,
++			unsigned len);
++
+ /* dhcpleasequery.c */
+ void dhcpleasequery (struct packet *, int);
+ void dhcpv6_leasequery (struct data_string *, struct packet *);
+@@ -3233,6 +3239,8 @@ void change_host_uid(struct host_decl *host, const char *data, int len);
+ int find_hosts_by_haddr (struct host_decl **, int,
+ 			 const unsigned char *, unsigned,
+ 			 const char *, int);
++int find_hosts_by_ifname (struct host_decl **, const unsigned char *,
++				size_t, const char *, int);
+ int find_hosts_by_uid (struct host_decl **, const unsigned char *,
+ 		       unsigned, const char *, int);
+ int find_hosts_by_option(struct host_decl **, struct packet *,
+@@ -3263,6 +3271,10 @@ void dissociate_lease (struct lease *);
+ void pool_timer (void *);
+ int find_lease_by_uid (struct lease **, const unsigned char *,
+ 		       unsigned, const char *, int);
++int find_lease_by_ifname (struct lease **, const unsigned char *,
++				unsigned, const char *, int);
++int find_lease_by_ifname (struct lease **, const unsigned char *,
++				unsigned, const char *, int);
+ int find_lease_by_hw_addr (struct lease **, const unsigned char *,
+ 			   unsigned, const char *, int);
+ int find_lease_by_ip_addr (struct lease **, struct iaddr,
+@@ -3271,6 +3283,8 @@ void uid_hash_add (struct lease *);
+ void uid_hash_delete (struct lease *);
+ void hw_hash_add (struct lease *);
+ void hw_hash_delete (struct lease *);
++void ifname_hash_add (struct lease *);
++void ifname_hash_delete (struct lease *);
+ int write_leases (void);
+ int write_leases6(void);
+ int lease_enqueue (struct lease *);
+diff --git a/server/dhcp.c b/server/dhcp.c
+index 8d600c7..4f3e221 100644
+--- a/server/dhcp.c
++++ b/server/dhcp.c
+@@ -4449,6 +4449,125 @@ lowest_site_code(const void *key, unsigned len, void *object)
+ 	return ISC_R_SUCCESS;
+ }
+ 
++/*
++ * Comparison functions for ifname, client-identifier (uid), and hardware
++ * address.
++ */
++
++isc_boolean_t
++same_ifname(struct ifname *a, struct ifname *b)
++{
++	return ((a->len == b->len) &&
++		(memcmp (a->name, b->name, a->len) == 0));
++}
++
++/*
++ * Build ifname from a packet
++ */
++
++isc_result_t
++build_ifname(struct ifname *ifname, struct packet *packet)
++{
++	isc_result_t result = ISC_R_SUCCESS;
++	struct option_cache *circuit_oc;
++	struct option_cache *remote_oc;
++	struct data_string data;
++	unsigned int len = 0;
++	unsigned char name[256];
++
++	/* If there are both relay agent remote_id and circuit_id options and
++	   create ifname from them; otherwise, use the incoming interface.
++	*/
++	if ((packet->options->universe_count > agent_universe.index) &&
++	    (packet->options->universes[agent_universe.index] != NULL) &&
++	    (circuit_oc = lookup_option(&agent_universe, packet->options,
++					RAI_CIRCUIT_ID)) &&
++	    (remote_oc = lookup_option(&agent_universe, packet->options,
++				       RAI_REMOTE_ID))) {
++
++		/* extract the remote_id */
++		if (!evaluate_option_cache (&data, packet, (struct lease *)0,
++					    (struct client_state *)0,
++					    packet -> options,
++					    (struct option_state *)0,
++					    &global_scope, remote_oc, MDL)) {
++			result = ISC_R_NOTFOUND;
++			log_error ("unable to extract relay agent REMOTE_ID");
++		}
++		if (data.len >= sizeof name) {
++			result = ISC_R_NOSPACE;
++			log_error ("%s:%d: relay REMOTE_ID \"%s\" is > %zd",
++				   MDL, data.data, sizeof name);
++		} else {
++			memcpy (&name [len], data.data, data.len);
++			len = data.len;
++		}
++
++		/* add the separator */
++		name [len++] = ':';
++
++		/* extract the circuit_id */
++		if (!evaluate_option_cache (&data, packet, (struct lease *)0,
++					    (struct client_state *)0,
++					    packet -> options,
++					    (struct option_state *)0,
++					    &global_scope, circuit_oc, MDL)) {
++			result = ISC_R_NOTFOUND;
++			log_error ("unable to extract relay agent CIRCUIT_ID");
++		}
++		if (data.len >= (sizeof name - len)) {
++			result = ISC_R_NOSPACE;
++			log_error ("%s:%d: relay CIRCUIT_ID \"%s\" is > %zd",
++				   MDL, data.data, (sizeof name - len));
++		} else {
++			memcpy (&name [len], data.data, data.len);
++			len += data.len;
++		}
++
++		/* clean up */
++		data_string_forget (&data, MDL);
++
++		if (result) {
++			return result;
++		} else {
++			return set_ifname (ifname, name, len);
++		}
++
++	} else {
++		return set_ifname (ifname,
++				   (u_int8_t *)packet -> interface -> name,
++				   strlen (packet -> interface -> name));
++	}
++}
++
++/*
++ * Set functions to encapsulate dynamic storage allocation/deallocation
++ *
++ * note that the name is null terminated (but the length does not
++ * include the termination character).
++ */
++
++isc_result_t
++set_ifname(struct ifname *ifname, unsigned char *name, unsigned len)
++{
++        /* clean up existing name */
++        if (ifname -> len) {
++                ifname -> len = 0;
++                dfree (ifname -> name, MDL);
++        }
++        ifname -> len = len;
++        if (ifname -> len) {
++                ifname -> name = dmalloc ((ifname -> len + 1), MDL);
++                if (ifname -> name == NULL) {
++                        return ISC_R_NOMEMORY;
++                } else {
++                        memcpy (ifname -> name, name, ifname -> len);
++                        ifname -> name [ifname -> len] = '\0';
++                }
++        }
++        return ISC_R_SUCCESS;
++}
++
+ static void
+ maybe_return_agent_options(struct packet *packet, struct option_state *options)
+ {
+diff --git a/server/mdb.c b/server/mdb.c
+index be4d19a..acb80e6 100644
+--- a/server/mdb.c
++++ b/server/mdb.c
+@@ -617,6 +617,12 @@ int find_hosts_by_haddr (struct host_decl **hp, int htype,
+ 				 h.hbuf, h.hlen, file, line);
+ }
+ 
++int find_hosts_by_ifname (struct host_decl **hp, const unsigned char *name,
++			  size_t len, const char *file, int line)
++{
++	return host_hash_lookup (hp, host_ifname_hash, name, len, file, line);
++}
++
+ int find_hosts_by_uid (struct host_decl **hp,
+ 		       const unsigned char *data, unsigned len,
+ 		       const char *file, int line)
+@@ -1968,10 +1974,19 @@ int find_lease_by_hw_addr (struct lease **lp,
+ 				    file, line);
+ }
+ 
++int find_lease_by_ifname (struct lease **lp,
++			  const unsigned char *name, unsigned len,
++			  const char *file, int line)
++{
++	return lease_id_hash_lookup(lp, lease_ifname_hash,
++				    (const unsigned char*)name, len, file,
++				    line);
++}
++
+ /* If the lease is preferred over the candidate, return truth.  The
+  * 'cand' and 'lease' names are retained to read more clearly against
+- * the 'uid_hash_add' and 'hw_hash_add' functions (this is common logic
+- * to those two functions).
++ * the 'uid_hash_add', 'hw_hash_add', and 'ifname_hash_add' functions
++ * (this is common logic to those three functions).
+  *
+  * 1) ACTIVE leases are preferred.  The active lease with
+  *    the longest lifetime is preferred over shortest.
+@@ -2257,6 +2272,134 @@ void hw_hash_delete (lease)
+ 		lease_dereference (&head, MDL);
+ }
+ 
++/* Add the specified lease to the ifname hash. */
++
++void
++ifname_hash_add(struct lease *lease)
++{
++	struct lease *head = NULL;
++	struct lease *cand = NULL;
++	struct lease *prev = NULL;
++	struct lease *next = NULL;
++
++	/* If it's not in the hash, just add it. */
++	if (!find_lease_by_ifname (&head, lease -> ifname.name,
++				    lease -> ifname.len, MDL))
++		lease_id_hash_add(lease_ifname_hash,
++				  lease->ifname.name,
++				  lease->ifname.len, lease, MDL);
++	else {
++		/* Otherwise, insert it into the list in order of its
++		 * preference for "resuming allocation to the client."
++		 *
++		 * Because we don't have control of the hash bucket index
++		 * directly, we have to remove and re-insert the client
++		 * id into the hash if we're inserting onto the head.
++		 */
++		lease_reference(&cand, head, MDL);
++		while (cand != NULL) {
++			if (client_lease_preferred(cand, lease))
++				break;
++
++			if (prev != NULL)
++				lease_dereference(&prev, MDL);
++			lease_reference(&prev, cand, MDL);
++
++			if (cand->n_hw != NULL)
++				lease_reference(&next, cand->n_ifname, MDL);
++
++			lease_dereference(&cand, MDL);
++
++			if (next != NULL) {
++				lease_reference(&cand, next, MDL);
++				lease_dereference(&next, MDL);
++			}
++		}
++
++		/* If we want to insert 'before cand', and prev is NULL,
++		 * then it was the head of the list.  Assume that position.
++		 */
++		if (prev == NULL) {
++			lease_reference(&lease->n_ifname, head, MDL);
++			lease_id_hash_delete(lease_ifname_hash,
++					     lease->ifname.name,
++					     lease->ifname.len, MDL);
++			lease_id_hash_add(lease_ifname_hash,
++					  lease->ifname.name,
++					  lease->ifname.len,
++					  lease, MDL);
++		} else /* (prev != NULL) */ {
++			if(prev->n_hw != NULL) {
++				lease_reference(&lease->n_ifname, prev->n_ifname,
++						MDL);
++				lease_dereference(&prev->n_ifname, MDL);
++			}
++			lease_reference(&prev->n_ifname, lease, MDL);
++
++			lease_dereference(&prev, MDL);
++		}
++
++		if (cand != NULL)
++			lease_dereference(&cand, MDL);
++		lease_dereference(&head, MDL);
++	}
++}
++
++/* Delete the specified lease from the ifname hash. */
++
++void ifname_hash_delete (lease)
++	struct lease *lease;
++{
++	struct lease *head = (struct lease *)0;
++	struct lease *next = (struct lease *)0;
++
++	/* If it's not in the hash, we have no work to do. */
++	if (!find_lease_by_ifname (&head, lease -> ifname.name,
++				    lease -> ifname.len, MDL)) {
++		if (lease -> n_ifname)
++			lease_dereference (&lease -> n_ifname, MDL);
++		return;
++	}
++
++	/* If the lease we're freeing is at the head of the list,
++	   remove the hash table entry and add a new one with the
++	   next lease on the list (if there is one). */
++	if (head == lease) {
++		lease_id_hash_delete(lease_ifname_hash,
++				     lease->ifname.name,
++				     lease->ifname.len, MDL);
++		if (lease->n_ifname) {
++			lease_id_hash_add(lease_ifname_hash,
++					  lease->n_ifname->ifname.name,
++					  lease->n_ifname->ifname.len,
++					  lease->n_ifname, MDL);
++			lease_dereference(&lease->n_ifname, MDL);
++		}
++	} else {
++		/* Otherwise, look for the lease in the list of leases
++		   attached to the hash table entry, and remove it if
++		   we find it. */
++		while (head -> n_ifname) {
++			if (head -> n_ifname == lease) {
++				lease_dereference (&head -> n_ifname, MDL);
++				if (lease -> n_ifname) {
++					lease_reference (&head -> n_ifname,
++							 lease -> n_ifname, MDL);
++					lease_dereference (&lease -> n_ifname,
++							   MDL);
++				}
++				break;
++			}
++			lease_reference (&next, head -> n_ifname, MDL);
++			lease_dereference (&head, MDL);
++			lease_reference (&head, next, MDL);
++			lease_dereference (&next, MDL);
++		}
++	}
++	if (head)
++		lease_dereference (&head, MDL);
++}
++
+ /* Write all interesting leases to permanent storage. */
+ 
+ int write_leases ()

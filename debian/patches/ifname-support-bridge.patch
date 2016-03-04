@@ -1,0 +1,108 @@
+Debug Patch to support bridge Interface
+
+diff --git a/debian/changelog b/debian/changelog
+index 6dc03ad..4da9b9f 100644
+--- a/debian/changelog
++++ b/debian/changelog
+@@ -1,3 +1,9 @@
++isc-dhcp (4.2.2.dfsg.1-5+deb70u6+cl2+1) CumulusLinux-2.5; urgency=low
++
++  * Cumulus Networks patches
++
++ -- Vidya Sagar Ravipati <vidya@monster-07.cumulusnetworks.com>  Wed, 27 May 2015 12:13:39 -0700
++
+ isc-dhcp (4.2.2.dfsg.1-5+deb70u6+cl2) CumulusLinux-2.5; urgency=low
+ 
+   * Cumulus Networks patches
+diff --git a/server/dhcp.c b/server/dhcp.c
+index f6ae964..624759f 100644
+--- a/server/dhcp.c
++++ b/server/dhcp.c
+@@ -401,6 +401,52 @@ void dhcpdiscover (packet, ms_nulltp)
+ 		lease_dereference (&lease, MDL);
+ }
+ 
++/*
++ * API to return the  interface on which the packet is recieved
++ *
++ * Return:
++ * < 0 in case of error
++ */
++static int bridgefdbquery(const char *hwAddr, char *interface, int *vlanid) {
++
++#define xstr(s) str(s)
++#define str(s) #s
++#define FDB_STRING_LEN  100
++#define FDB_BUFFER_LEN  (FDB_STRING_LEN + 1)
++
++/*
++ * Format for sscanf() to read the 1st, 3th, and 5th
++ * space-delimited fields
++ *
++ * bridge fdb show output
++ * 6c:64:1a:00:06:13 dev swp35 vlan 0 master bridge permanent
++ */
++#define FDB_LINE_FORMAT "%" xstr(FDB_STRING_LEN) "s %*s " \
++					"%" xstr(FDB_STRING_LEN) "s %*s %d %*s"
++
++	char	cmdstr[FDB_BUFFER_LEN];
++	char	buf[FDB_BUFFER_LEN];
++	char	macAddr[FDB_BUFFER_LEN];
++
++	if ((interface == NULL) || (vlanid == NULL)) {
++		return 0;
++	}
++	sprintf(cmdstr, "/bin/bridge fdb show | grep -m 1 %s", hwAddr);
++	FILE *cmd = popen(cmdstr, "r");
++
++	if(cmd != NULL) {
++		while(fgets(buf, sizeof(buf), cmd)) {
++			sscanf(buf, FDB_LINE_FORMAT, macAddr, interface, vlanid);
++			log_debug ("bridgefdbquery: macAddr:%s interface: %s vlanid %d",
++					macAddr,
++					interface, *vlanid);
++		}
++		pclose(cmd);
++		return 0;
++	}
++
++	return -1;
++}
+ void dhcprequest (packet, ms_nulltp, ip_lease)
+ 	struct packet *packet;
+ 	int ms_nulltp;
+@@ -422,6 +468,34 @@ void dhcprequest (packet, ms_nulltp, ip_lease)
+ 	int have_server_identifier = 0;
+ 	int have_requested_addr = 0;
+ 
++	char interface[IFNAMSIZ] = "";
++	int vlanid = 0;
++
++	/*
++	 * Query to identify the exact physical interface
++	 * only when source mac address is present and
++	 * 20: DHCP relay agent IP address is not present
++	 */
++	if (packet->raw->htype && !packet->raw->giaddr.s_addr) {
++		if (bridgefdbquery(print_hw_addr (packet -> raw -> htype,
++				   packet -> raw -> hlen,
++				   packet -> raw -> chaddr), interface, &vlanid) < 0) {
++			log_debug ("MAC Address: %s (interface:%s vlan:%d) not found in bridge fdb show",
++				   print_hw_addr (packet -> raw -> htype,
++				   packet -> raw -> hlen,
++				   packet -> raw -> chaddr), interface, vlanid);
++			goto out;
++		}
++		if ((strcasecmp(interface, packet->interface->name)) &&
++				(strlen(interface) > 0)) {
++			log_debug ("Changing Interfface for MAC Address: %s from %s (packet interface) to %s",
++				   print_hw_addr (packet -> raw -> htype,
++				   packet -> raw -> hlen,
++				   packet -> raw -> chaddr), packet->interface->name, interface);
++			strncpy(packet->interface->name, interface, IFNAMSIZ);
++		}
++	}
++
+ 	oc = lookup_option (&dhcp_universe, packet -> options,
+ 			    DHO_DHCP_REQUESTED_ADDRESS);
+ 	memset (&data, 0, sizeof data);

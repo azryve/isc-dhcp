@@ -1,0 +1,51 @@
+The original logic did not take into account failure scenarios in "mockup_lease"
+that result in mockup_lease finding a host declaration but not returning a fixed
+lease.  These conditions are handled correctly when searching for a lease by
+client_identifier (in the section above), thus we copy the behavior.
+
+Specifically, we should leave this section with "hp" being dereferenced and
+"host" being referenced if "mockup_lease" is not able to provide us with a
+proper "fixed_lease".
+
+The modified logic insures that either one (and only one) of fixed_lease and
+host are set after all of the actions during find_hosts_by_* searches.  There
+was inconsistency in the way that the haddr search resulted.
+
+mockup_lease    host  fixed_lease
+---------------------------------
+pass            0     ref
+fail            ref   0
+
+diff --git a/server/dhcp.c b/server/dhcp.c
+index af524c2..3870ad0 100644
+--- a/server/dhcp.c
++++ b/server/dhcp.c
+@@ -3345,17 +3345,19 @@ int find_lease (struct lease **lp,
+ 					 packet -> raw -> hlen, MDL)) {
+ 			/* Remember if we know of this client. */
+ 			packet -> known = 1;
+-			if (host)
+-				host_dereference (&host, MDL);
+-			host_reference (&host, hp, MDL);
+-			host_dereference (&hp, MDL);
+-			mockup_lease (&fixed_lease, packet, share, host);
++			mockup_lease (&fixed_lease, packet, share, hp);
++		}
++
+ #if defined (DEBUG_FIND_LEASE)
+-			if (fixed_lease) {
+-				log_info ("Found host for link address: %s.",
+-				      piaddr (fixed_lease -> ip_addr));
+-			}
++		if (fixed_lease) {
++			log_info ("Found host for link address: %s.",
++				  piaddr (fixed_lease -> ip_addr));
++		}
+ #endif
++		if (hp) {
++			if (!fixed_lease) /* Save the host if we found one. */
++				host_reference (&host, hp, MDL);
++			host_dereference (&hp, MDL);
+ 		}
+ 	}
+ 

@@ -1,0 +1,299 @@
+File input parsing and output formatting
+
+diff --git a/common/conflex.c b/common/conflex.c
+index 1ec2328..999d6a9 100644
+--- a/common/conflex.c
++++ b/common/conflex.c
+@@ -1039,6 +1039,8 @@ intern(char *atom, enum dhcp_token dfv) {
+ 			return IAADDR;
+ 	      	if (!strcasecmp(atom+1, "aprefix")) 
+ 			return IAPREFIX;
++		if (!strcasecmp (atom + 1, "fname"))
++			return IFNAME;
+ 		if (!strcasecmp (atom + 1, "nclude"))
+ 			return INCLUDE;
+ 		if (!strcasecmp (atom + 1, "nteger"))
+diff --git a/common/parse.c b/common/parse.c
+index 049ce7b..d0a5556 100644
+--- a/common/parse.c
++++ b/common/parse.c
+@@ -643,6 +643,45 @@ void parse_hardware_param (cfile, hardware)
+ 	}
+ }
+ 
++/*
++ * ifname-parameter :== IFNAME string SEMI
++ */
++
++void parse_ifname_param (cfile, ifname)
++	struct parse *cfile;
++	struct ifname *ifname;
++{
++	enum dhcp_token token;
++	const char *val;
++	unsigned len;
++
++	token = next_token (&val, &len, cfile);
++	if (token != STRING) {
++		parse_warn (cfile, "expecting ifname string (e.g. \"eth0\")");
++		skip_to_semi (cfile);
++		return;
++	}
++
++	if (len <= 0) {
++		parse_warn (cfile, "ifname len %d is invalid\n", len);
++	} else {
++		/* copied from dhcp.c set_ifname (no place for utilities) */
++		if (!(ifname -> name = dmalloc (len + 1, MDL))) {
++			parse_warn (cfile, "no memory for ifname %s\n", val);
++			return;
++		}
++		memcpy (ifname -> name, val, len);
++		ifname -> name [len] = '\0';
++		ifname -> len = len;
++	}
++
++	token = next_token (&val, (unsigned *)0, cfile);
++	if (token != SEMI) {
++		parse_warn (cfile, "expecting semicolon.");
++		skip_to_semi (cfile);
++	}
++}
++
+ /* lease-time :== NUMBER SEMI */
+ 
+ void parse_lease_time (cfile, timep)
+diff --git a/includes/dhctoken.h b/includes/dhctoken.h
+index dc28f39..69c768f 100644
+--- a/includes/dhctoken.h
++++ b/includes/dhctoken.h
+@@ -361,7 +361,8 @@ enum dhcp_token {
+ 	GETHOSTNAME = 662,
+ 	REWIND = 663,
+ 	INITIAL_DELAY = 664,
+-	GETHOSTBYNAME = 665
++	GETHOSTBYNAME = 665,
++	IFNAME = 666
+ };
+ 
+ #define is_identifier(x)	((x) >= FIRST_TOKEN &&	\
+diff --git a/server/confpars.c b/server/confpars.c
+index c0742d4..34ea80f 100644
+--- a/server/confpars.c
++++ b/server/confpars.c
+@@ -361,6 +361,7 @@ int parse_statement (cfile, group, type, host_decl, declaration)
+ 	struct shared_network *share;
+ 	char *n;
+ 	struct hardware hardware;
++	struct ifname ifname;
+ 	struct executable_statement *et, *ep;
+ 	struct option *option = NULL;
+ 	struct option_cache *cache;
+@@ -577,6 +578,22 @@ int parse_statement (cfile, group, type, host_decl, declaration)
+ 				    "not allowed here.");
+ 		break;
+ 
++	      case IFNAME:
++		next_token (&val, (unsigned *)0, cfile);
++		memset (&ifname, 0, sizeof ifname);
++		if (host_decl && memcmp(&ifname, &(host_decl -> ifname),
++					sizeof(ifname)) != 0) {
++			parse_warn(cfile, "Host on interface %s is already "
++					  "configured.", host_decl->name);
++			break;
++		}
++
++		if (host_decl)
++			parse_ifname_param (cfile, &host_decl -> ifname);
++		else
++			parse_warn (cfile, "ifname parameter not allowed here.");
++		break;
++
+ 	      case FIXED_ADDR:
+ 	      case FIXED_ADDR6:
+ 		next_token(&val, NULL, cfile);
+@@ -3049,6 +3066,11 @@ int parse_lease_declaration (struct lease **lp, struct parse *cfile)
+ 					      &lease -> hardware_addr);
+ 			break;
+ 
++		      case IFNAME:
++			seenbit = 512;
++			parse_ifname_param (cfile, &lease -> ifname);
++			break;
++
+ 		      case TOKEN_RESERVED:
+ 			seenbit = 0;
+ 			lease->flags |= RESERVED_LEASE;
+diff --git a/server/db.c b/server/db.c
+index 107d0b6..b54488e 100644
+--- a/server/db.c
++++ b/server/db.c
+@@ -200,6 +200,12 @@ int write_lease (lease)
+ 		}
+ 	}
+ 
++	if (lease -> ifname.len) {
++		errno = 0;
++		fprintf (db_file, "\n  ifname \"%s\";", lease -> ifname.name);
++		if (errno)
++			++errors;
++	}
+ 	if (lease -> hardware_addr.hlen) {
+ 		errno = 0;
+ 		fprintf (db_file, "\n  hardware %s %s;",
+@@ -345,6 +351,12 @@ int write_host (host)
+ 			if (errno)
+ 				++errors;
+ 		}
++		if (host -> ifname.len) {
++			errno = 0;
++			fprintf (db_file, "\n  ifname %s;", host -> ifname.name);
++			if (errno)
++				++errors;
++		}
+ 		if (host -> client_identifier.len) {
+ 			int i;
+ 			errno = 0;
+diff --git a/server/mdb.c b/server/mdb.c
+index acb80e6..e5c90dc 100644
+--- a/server/mdb.c
++++ b/server/mdb.c
+@@ -306,6 +306,42 @@ isc_result_t enter_host (hd, dynamicp, commit)
+ 		}
+ 	}
+ 
++	if (hd -> ifname.len) {
++		if (!host_ifname_hash) {
++			if (!host_new_hash(&host_ifname_hash,
++					   HOST_HASH_SIZE, MDL))
++				log_fatal ("Can't allocate ifname hash");
++		} else {
++			/* If there isn't already a host decl matching this
++			   ifname, add it to the hash table. */
++			host_hash_lookup (&hp, host_ifname_hash,
++					  hd -> ifname.name,
++					  hd -> ifname.len,
++					  MDL);
++		}
++		if (!hp)
++			host_hash_add (host_ifname_hash,
++				       hd -> ifname.name,
++				       hd -> ifname.len,
++				       hd, MDL);
++		else {
++			/* If there was already a host declaration for
++			   this ifname, add this one to the end of the list,
++			   but don't link it in twice... */
++			if (!np) {
++				for (np = hp; np -> n_ipaddr;
++				     np = np -> n_ipaddr) {
++					if (hd == np)
++						break;
++				}
++				if (hd != np)
++					host_reference (&np -> n_ipaddr,
++							hd, MDL);
++			}
++			host_dereference (&hp, MDL);
++		}
++	}
++
+ 	/* See if there's a statement that sets the client identifier.
+ 	   This is a kludge - the client identifier really shouldn't be
+ 	   set with an executable statement. */
+@@ -462,7 +498,7 @@ isc_result_t delete_host (hd, commit)
+ 	struct host_decl *hp = (struct host_decl *)0;
+ 	struct host_decl *np = (struct host_decl *)0;
+ 	struct host_decl *foo;
+-	int hw_head = 0, uid_head = 1;
++	int hw_head = 0, uid_head = 1, ifname_head = 0;
+ 
+ 	/* Don't need to do it twice. */
+ 	if (hd -> flags & HOST_DECL_DELETED)
+@@ -511,8 +547,51 @@ isc_result_t delete_host (hd, commit)
+ 	    }
+ 	}
+ 
++	if (hd -> ifname.len) {
++	    if (host_ifname_hash) {
++		if (host_hash_lookup (&hp, host_ifname_hash,
++				      hd -> ifname.name,
++				      hd -> ifname.len,
++				      MDL)) {
++		    if (hp == hd) {
++			host_hash_delete (host_ifname_hash,
++					  hd -> ifname.name,
++					  hd -> ifname.len,
++					  MDL);
++			ifname_head = 1;
++		    } else {
++			np = (struct host_decl *)0;
++			foo = (struct host_decl *)0;
++			host_reference (&foo, hp, MDL);
++			while (foo) {
++			    if (foo == hd)
++				    break;
++			    if (np)
++				host_dereference (&np, MDL);
++			    host_reference (&np, foo, MDL);
++			    host_dereference (&foo, MDL);
++			    if (np -> n_ipaddr)
++				    host_reference (&foo, np -> n_ipaddr, MDL);
++			}
++
++			if (foo) {
++			    host_dereference (&np -> n_ipaddr, MDL);
++			    if (hd -> n_ipaddr)
++				host_reference (&np -> n_ipaddr,
++						hd -> n_ipaddr, MDL);
++			    host_dereference (&foo, MDL);
++			}
++			if (np)
++				host_dereference (&np, MDL);
++		    }
++		    host_dereference (&hp, MDL);
++		}
++	    }
++	}
++
+ 	/* If we got a client identifier, hash this entry by
+ 	   client identifier. */
++
+ 	if (hd -> client_identifier.len) {
+ 	    if (host_uid_hash) {
+ 		if (host_hash_lookup (&hp, host_uid_hash,
+@@ -566,6 +645,12 @@ isc_result_t delete_host (hd, commit)
+ 				 hd -> n_ipaddr -> client_identifier.len,
+ 				 hd -> n_ipaddr, MDL);
+ 		}
++		if (ifname_head && hd -> n_ipaddr -> ifname.len) {
++			host_hash_add (host_ifname_hash,
++				       hd -> n_ipaddr -> ifname.name,
++				       hd -> n_ipaddr -> ifname.len,
++				       hd -> n_ipaddr, MDL);
++		}
+ 		if (hw_head && hd -> n_ipaddr -> interface.hlen) {
+ 			host_hash_add (host_hw_addr_hash,
+ 				       hd -> n_ipaddr -> interface.hbuf,
+@@ -761,6 +846,11 @@ void new_address_range (cfile, low, high, subnet, pool, lpchain)
+ 				       MDL))
+ 			log_fatal ("Can't allocate lease/hw hash");
+ 	}
++	if (!lease_ifname_hash) {
++		if (!lease_id_new_hash(&lease_ifname_hash, LEASE_HASH_SIZE,
++				       MDL))
++			log_fatal ("Can't allocate lease/ifname hash");
++	}
+ 
+ 	/* Make sure that high and low addresses are in this subnet. */
+ 	if (!addr_eq(subnet->net, subnet_number(low, subnet->netmask))) {
+@@ -2509,7 +2599,8 @@ int write_leases ()
+ 		    for (l = *(lptr [i]); l; l = l -> next) {
+ #if !defined (DEBUG_DUMP_ALL_LEASES)
+ 			if (l->hardware_addr.hlen != 0 || l->uid_len != 0 ||
+-			    l->tsfp != 0 || l->binding_state != FTS_FREE)
++			    l->tsfp != 0 || l->binding_state != FTS_FREE ||
++			    l->ifname.len)
+ #endif
+ 			{
+ 			    if (!write_lease (l))

@@ -1,0 +1,24 @@
+Hostname from client overrides host declaration
+
+As written, a host that sends a hostname option will override the hostname
+provided by a host declaration.  This seems like a bug especially when coupled with
+ddns.
+
+diff --git a/server/dhcp.c b/server/dhcp.c
+index 3870ad0..8d600c7 100644
+--- a/server/dhcp.c
++++ b/server/dhcp.c
+@@ -2394,6 +2394,13 @@ void ack_lease (packet, lease, offer, when, msg, ms_nulltp, hp)
+ 		lt -> client_hostname = lease -> client_hostname;
+ 		lease -> client_hostname = (char *)0;
+ 	} else if (oc && s1) {
++/* jrrivers
++   seems like a bug... seems like they are letting client host_name options
++   override a hostname from a host declaration.  Seems like this should
++   check for a host declaration first.
++   ... test this theory ...
++*/
++
+ 		lt -> client_hostname = dmalloc (d1.len + 1, MDL);
+ 		if (!lt -> client_hostname)
+ 			log_error ("no memory for client hostname.");
