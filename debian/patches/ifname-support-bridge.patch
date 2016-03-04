@@ -1,19 +1,5 @@
 Debug Patch to support bridge Interface
 
-diff --git a/debian/changelog b/debian/changelog
-index 6dc03ad..4da9b9f 100644
---- a/debian/changelog
-+++ b/debian/changelog
-@@ -1,3 +1,9 @@
-+isc-dhcp (4.2.2.dfsg.1-5+deb70u6+cl2+1) CumulusLinux-2.5; urgency=low
-+
-+  * Cumulus Networks patches
-+
-+ -- Vidya Sagar Ravipati <vidya@monster-07.cumulusnetworks.com>  Wed, 27 May 2015 12:13:39 -0700
-+
- isc-dhcp (4.2.2.dfsg.1-5+deb70u6+cl2) CumulusLinux-2.5; urgency=low
- 
-   * Cumulus Networks patches
 diff --git a/server/dhcp.c b/server/dhcp.c
 index f6ae964..624759f 100644
 --- a/server/dhcp.c

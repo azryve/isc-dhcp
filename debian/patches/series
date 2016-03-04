@@ -4,3 +4,16 @@ no_loopback_checksum
 bind-autoconf
 cve-2011-4539.patch
 cve-2011-4868.patch
+
+fix-dhcrelay-start-dependency.patch
+bug-early-lease_dereference.patch
+bug-find_lease-fixed_lease-by-hw_addr.patch
+bug-host-name-from-client.patch
+ifname-host-decl-data-structures.patch
+ifname-host-decl-utility-functions.patch
+ifname-host-decl-file.patch
+ifname-host-decl-omapi.patch
+ifname-host-decl-failover.patch
+ifname-host-decl-lease.patch
+ifname-host-decl-doc.patch
+ifname-support-bridge.patch
