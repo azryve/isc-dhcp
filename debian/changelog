@@ -1,3 +1,11 @@
+isc-dhcp (4.2.2.dfsg.1-5-cl2.5.3-yandex) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Cumulus patches from
+    http://oss.cumulusnetworks.com/CumulusLinux-2.5.3/patches/isc-dhcp/
+
+ -- Fedor Zhukov <azryve@yandex-team.ru>  Sat, 05 Mar 2016 01:56:42 +0300
+
 isc-dhcp (4.2.2.dfsg.1-5) unstable; urgency=medium
 
   [ Andrew Pollock ]
