@@ -6,8 +6,8 @@
 # Provides:          isc-dhcp-relay
 # Required-Start:    $remote_fs $network
 # Required-Stop:     $remote_fs $network
-# Should-Start:      $local_fs
-# Should-Stop:       $local_fs
+# Should-Start:      $local_fs $routing
+# Should-Stop:       $local_fs $routing
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
 # Short-Description: DHCP relay

@@ -1,4 +1,4 @@
-isc-dhcp (4.2.2.dfsg.1-5-cl2.5.3-yandex) unstable; urgency=medium
+isc-dhcp (4.2.2.dfsg.1-5-noc1) unstable; urgency=medium
 
   * Non-maintainer upload.
   * Cumulus patches from

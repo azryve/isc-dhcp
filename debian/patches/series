@@ -5,7 +5,6 @@ bind-autoconf
 cve-2011-4539.patch
 cve-2011-4868.patch
 
-fix-dhcrelay-start-dependency.patch
 bug-early-lease_dereference.patch
 bug-find_lease-fixed_lease-by-hw_addr.patch
 bug-host-name-from-client.patch
