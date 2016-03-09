@@ -3,6 +3,14 @@ isc-dhcp (4.2.2.dfsg.1-5-noc1) unstable; urgency=medium
   * Non-maintainer upload.
   * Cumulus patches from
     http://oss.cumulusnetworks.com/CumulusLinux-2.5.3/patches/isc-dhcp/
+  * Custom patches for using on Cumulus L3TOR boxes
+  * Using downstream address as src of forwarded requests
+  * Process packets that destined to an global address
+    of one of ours interfaces as if it came to that interface itself.
+    Allows us not to use uplink iface names in config,
+    and start relay like:
+    $ dhcrelay -6 -l br0.999 -u <server_addr>%br0.999
+
 
  -- Fedor Zhukov <azryve@yandex-team.ru>  Sat, 05 Mar 2016 01:56:42 +0300
 

@@ -1,0 +1,120 @@
+Index: isc-dhcp_4.2.2/common/socket.c
+===================================================================
+--- isc-dhcp_4.2.2.orig/common/socket.c	2016-03-08 12:19:04.914678038 +0300
++++ isc-dhcp_4.2.2/common/socket.c	2016-03-08 12:47:04.969556888 +0300
+@@ -497,6 +497,16 @@
+ 	if (req_multi)
+ 		if_register_multicast(info);
+ 
++	if (info->v6addr_src)
++	{
++		memcpy(&local_address6,
++			info->v6addr_src,
++			sizeof(local_address6));
++		info->ucastfd = if_register_socket(info, AF_INET6, 0);
++		if (info->ucastfd < 1)
++			log_fatal("failed to open ucast socket");
++		memset(&local_address6, 0, sizeof(local_address6));
++	}
+ 	get_hw_addr(info->name, &info->hw_address);
+ 
+ 	if (!quiet_interface_discovery) {
+@@ -747,6 +757,11 @@
+ 	pktinfo = (struct in6_pktinfo *)CMSG_DATA(cmsg);
+ 	memset(pktinfo, 0, sizeof(*pktinfo));
+ 	pktinfo->ipi6_ifindex = if_nametoindex(interface->name);
++	if (NULL != interface->v6addr_src) {
++		memcpy(&pktinfo->ipi6_addr,
++			interface->v6addr_src,
++			sizeof(pktinfo->ipi6_addr));
++	}
+ 	m.msg_controllen = cmsg->cmsg_len;
+ 
+ 	result = sendmsg(interface->wfdesc, &m, 0);
+Index: isc-dhcp_4.2.2/common/discover.c
+===================================================================
+--- isc-dhcp_4.2.2.orig/common/discover.c	2016-03-08 12:19:04.914678038 +0300
++++ isc-dhcp_4.2.2/common/discover.c	2016-03-08 13:11:03.579471112 +0300
+@@ -913,6 +913,9 @@
+ 		iface->v6address_max = new_max;
+ 	}
+ 	iface->v6addresses[iface->v6address_count++] = *addr;
++	if (! iface->v6addr_src &&
++	    ! IN6_IS_ADDR_LINKLOCAL(addr))
++		iface->v6addr_src = &iface->v6addresses[iface->v6address_count-1];
+ }
+ #endif /* DHCPv6 */
+ 
+@@ -1263,6 +1266,17 @@
+ 		if (next)
+ 			interface_reference (&tmp, next, MDL);
+ 	}
++	for (tmp = interfaces; tmp; tmp = tmp -> next) {
++		if (! tmp->ucastfd)
++			continue;
++		struct interface_info *new = dmalloc(sizeof(struct interface_info), MDL);
++		memcpy(new, tmp, sizeof(*new));
++		new->rfdesc = tmp->ucastfd;
++		new->wfdesc = tmp->ucastfd;
++		tmp->ucastfd = 0;
++		new->ucastfd = 0;
++		tmp->next = new;
++	}
+ 
+ 	/*
+ 	 * Now register all the remaining interfaces as protocols.
+@@ -1296,16 +1310,6 @@
+ 			log_fatal ("Can't register I/O handle for %s: %s",
+ 				   tmp -> name, isc_result_totext (status));
+ 
+-#if defined(DHCPv6)
+-		/* Only register the first interface for V6, since they all
+-		 * use the same socket.  XXX: This has some messy side
+-		 * effects if we start dynamically adding and removing
+-		 * interfaces, but we're well beyond that point in terms of
+-		 * mess.
+-		 */
+-		if (local_family == AF_INET6)
+-			break;
+-#endif
+ 	} /* for (tmp = interfaces; ... */
+ 
+ 	if (state == DISCOVER_SERVER && wifcount == 0) {
+@@ -1495,6 +1499,24 @@
+ 		while ((ip != NULL) && (if_nametoindex(ip->name) != if_idx))
+ 			ip = ip->next;
+ 
++                /* If threre is no matching ifaces still handle packet if */
++                /* it is destined to an global address of one of our ifaces */
++                if (ip == NULL &&
++                    ! IN6_IS_ADDR_UNSPECIFIED(&to) &&
++                    ! IN6_IS_ADDR_LOOPBACK(&to) &&
++                    ! IN6_IS_ADDR_LINKLOCAL(&to))
++                {
++                        for (ip = interfaces; ip != NULL; ip = ip->next) {
++                                size_t i;
++                                for (i = 0; i < ip->v6address_count; i++) {
++                                        if (!memcmp(&ip->v6addresses[i], &to, sizeof(to)))
++                                                break;
++                                }
++                                if (i < ip->v6address_count)
++                                        break;
++                        }
++                }
++
+ 		if (ip == NULL)
+ 			return ISC_R_NOTFOUND;
+ 
+Index: isc-dhcp_4.2.2/includes/dhcpd.h
+===================================================================
+--- isc-dhcp_4.2.2.orig/includes/dhcpd.h	2016-03-08 12:19:04.914678038 +0300
++++ isc-dhcp_4.2.2/includes/dhcpd.h	2016-03-08 12:28:23.963649841 +0300
+@@ -1258,6 +1258,8 @@
+ 					   with this interface. */
+ 	int v6address_max;		/* Maximum number of IPv6 addresses
+ 					   we can store in current buffer. */
++	struct in6_addr *v6addr_src;    /* src addres to use in sendmsg */
++	int ucastfd;
+ 
+ 	u_int8_t *circuit_id;		/* Circuit ID associated with this
+ 					   interface. */
